@@ -33,7 +33,13 @@ that pattern fresh, or wants to stop hardcoding day-counts by hand and read them
 instead. Use whichever of the three macros below fits how you already write SQL — or none of
 them.
 
-## Install
+## Install — two ways, both real, pick whichever fits
+
+This isn't on dbt Hub (by choice, not because it can't be — see [Publishing](#publishing)) — both
+install paths go straight through GitHub, and neither one requires keeping a manually-tracked
+local copy of anything.
+
+### Option A: as a real dbt package (versioned, upgradeable via `dbt deps`)
 
 ```yaml
 # packages.yml
@@ -42,14 +48,26 @@ packages:
     revision: v0.1.0  # pin to a tag
 ```
 
-Then `dbt deps`. (Not yet on dbt Hub — see [Publishing](#publishing) below.)
+Then `dbt deps`. **Call these with the package namespace prefix** — `{{ zhao_utils.wref(...) }}`,
+not bare `{{ wref(...) }}`. Confirmed against a real dbt-core project that bare calls to an
+installed package's macros don't resolve without extra setup; namespaced calls do, always, with
+zero setup. This matches how most dbt packages document themselves (e.g.
+`{{ dbt_utils.star(...) }}`). If you want bare calls with this option anyway, see
+["Bare calls, if you want them"](#bare-calls-if-you-want-them) below.
 
-**Call these with the package namespace prefix** — `{{ zhao_utils.wref(...) }}`, not bare
-`{{ wref(...) }}`. Confirmed against a real dbt-core project that bare calls to an installed
-package's macros don't resolve without extra setup; namespaced calls do, always, with zero setup.
-This matches how most dbt packages document themselves (e.g. `{{ dbt_utils.star(...) }}`). If you
-want bare calls anyway, see ["Bare calls, if you want them"](#bare-calls-if-you-want-them) below —
-there's a real, tested way to get that, just not for free.
+### Option B: copy the macro file directly into your own project (no package management at all)
+
+Download [`standalone/zhao_ref_standalone.sql`](standalone/zhao_ref_standalone.sql) and drop it
+straight into your own project's `macros/` folder — that's the whole install. No `packages.yml`,
+no `dbt deps`, and **calls are bare by default with this option** — `{{ wref(...) }}`, no
+namespace needed at all, since the macros now live directly in your own project.
+
+This is a genuinely different file from the package version (not just a copy) — its macros call
+each other without the `zhao_utils.` prefix, which is what makes bare calls work once it's living
+in your own project instead of installed as a package. Both are tested (see
+[Tested against](#tested-against)) and kept in this same repo deliberately, so a future fix to one
+doesn't get forgotten in the other. Trade-off versus Option A: no `dbt deps` upgrade path — you'd
+re-download the file to pick up a future update.
 
 ## Naming: `expand_back`/`expand_forward`, not `lookback`/`lookahead`
 
@@ -128,8 +146,12 @@ reachable by deliberately passing `expand_back`/`expand_forward` yourself.
 
 ## Bare calls, if you want them
 
-You can get `{{ wref(...) }}` working with no `zhao_utils.` prefix — but it takes one small file
-in *your own* project, not a `dbt_project.yml` change. Tested and confirmed working:
+**If bare calls are what you're after, Option B above (the standalone file) already gives you
+that by default** — nothing further needed. This section is for a narrower case: you want Option
+A's `dbt deps` versioning/upgrade path, *and* bare calls, at the same time.
+
+That combination takes one small extra file in *your own* project (not a `dbt_project.yml`
+change). Tested and confirmed working:
 
 ```sql
 -- your own project's macros/wref.sql
@@ -171,11 +193,12 @@ it being tied to one specific tool's release cycle.
 ## Tested against
 
 Empirically verified, not assumed:
-- **dbt-core 1.10.22 + DuckDB**: full real `dbt build` run, both the drop-in `wref()` path and
-  the explicit-args-without-meta.zhao warning path, compiled SQL manually inspected and confirmed
-  correct (`where order_date >= (batch_start - 3 days) and order_date < (batch_end + 4 days)`
-  for a `lookback: 3, lookahead: 4` config). Also confirmed: bare-call resolution genuinely fails
-  without a wrapper macro, and genuinely works with one (see above).
+- **dbt-core 1.10.22 + DuckDB**: full real `dbt build` run for both Option A (package install,
+  namespaced calls) and Option B (standalone file, bare calls) — same compiled-SQL correctness
+  confirmed for both (`where order_date >= (batch_start - 3 days) and order_date <
+  (batch_end + 4 days)` for a `lookback: 3, lookahead: 4` config). Also confirmed directly: a
+  bare call to an installed package's macro genuinely fails without a wrapper (or the standalone
+  file), and genuinely works with one.
 - **dbt Fusion 2.0.0-preview.203 + a real Databricks workspace**: compile-time verified —
   correct derived-table structure, correct `expand_back`/`expand_forward` direction, and correct
   per-adapter SQL dialect dispatch (`dbt.dateadd` compiled to Databricks-native
@@ -187,5 +210,7 @@ Empirically verified, not assumed:
 
 ## Publishing
 
-Not yet submitted to [dbt Hub](https://hub.getdbt.com) — planned as a follow-up once this has
-had more real-world use beyond the initial testing.
+Not on [dbt Hub](https://hub.getdbt.com) — a deliberate choice, not a blocker. GitHub is the
+install path (either option above), which doesn't require anyone to keep a local copy of
+anything themselves. Might reconsider Hub submission later once this has had real-world use
+beyond the initial testing.
