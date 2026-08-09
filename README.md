@@ -41,6 +41,8 @@ local copy of anything.
 
 ### Option A: as a real dbt package (versioned, upgradeable via `dbt deps`)
 
+**Step 1 — install the package:**
+
 ```yaml
 # packages.yml
 packages:
@@ -48,12 +50,31 @@ packages:
     revision: v0.1.0  # pin to a tag
 ```
 
-Then `dbt deps`. **Call these with the package namespace prefix** — `{{ zhao_utils.wref(...) }}`,
-not bare `{{ wref(...) }}`. Confirmed against a real dbt-core project that bare calls to an
-installed package's macros don't resolve without extra setup; namespaced calls do, always, with
-zero setup. This matches how most dbt packages document themselves (e.g.
-`{{ dbt_utils.star(...) }}`). If you want bare calls with this option anyway, see
-["Bare calls, if you want them"](#bare-calls-if-you-want-them) below.
+Then `dbt deps`. On its own, this means calling with the package namespace prefix —
+`{{ zhao_utils.wref(...) }}`, not bare `{{ wref(...) }}`. Confirmed against a real dbt-core
+project that bare calls to an installed package's macros don't resolve without extra setup;
+namespaced calls do, always, with zero setup. This matches how most dbt packages document
+themselves (e.g. `{{ dbt_utils.star(...) }}`).
+
+**Step 2 (recommended) — add a one-time wrapper macro to your own project, so you get bare calls
+*and* keep `dbt deps` upgradeability:**
+
+```sql
+-- your own project's macros/wref.sql
+{% macro wref(upstream_name, expand_back=none, expand_forward=none) %}
+  {{ return(zhao_utils.wref(upstream_name, expand_back, expand_forward)) }}
+{% endmacro %}
+```
+
+That's the whole setup — a plain macro in your own project that just forwards to the namespaced
+package macro, nothing else. Set it once and forget it: when the package updates via `dbt deps`,
+this wrapper doesn't need to change, since all the real logic lives in the package, not the
+wrapper — it just keeps calling through to whatever the new version does. (One honest caveat: this
+holds as long as the macro's argument names stay stable across versions; not a concern today.) Add
+the identical one-line wrapper for `zhao_window_start`/`zhao_window_end` too if you use those.
+
+Skip Step 2 if you're fine typing `zhao_utils.` — it's not required, just removes it if you'd
+rather not.
 
 ### Option B: copy the macro file directly into your own project (no package management at all)
 
@@ -146,31 +167,21 @@ reachable by deliberately passing `expand_back`/`expand_forward` yourself.
 
 ## Bare calls, if you want them
 
-**If bare calls are what you're after, Option B above (the standalone file) already gives you
-that by default** — nothing further needed. This section is for a narrower case: you want Option
-A's `dbt deps` versioning/upgrade path, *and* bare calls, at the same time.
+Covered above, in context:
+- **Package install (Option A)**: Step 2 in that section — a one-time wrapper macro in your own
+  project, forwards to the namespaced package macro, set-and-forget across future package
+  upgrades.
+- **Standalone file (Option B)**: bare by default, nothing extra needed.
 
-That combination takes one small extra file in *your own* project (not a `dbt_project.yml`
-change). Tested and confirmed working:
-
-```sql
--- your own project's macros/wref.sql
-{% macro wref(upstream_name, expand_back=none, expand_forward=none) %}
-  {{ return(zhao_utils.wref(upstream_name, expand_back, expand_forward)) }}
-{% endmacro %}
-```
-
-That's it — a plain macro in your own project, calling straight through to the namespaced
-package macro. Root-project macros are always resolvable bare, so this works with zero other
-configuration. Two things worth knowing:
-
-- **`adapter.dispatch()`/a `dispatch:` block in `dbt_project.yml` does *not* achieve this on its
-  own** — tested directly, and it doesn't. `dispatch` controls which *implementation* an
-  already-namespaced call resolves to (e.g. letting you override a package macro's behavior in
-  your own project); it was never a mechanism for eliminating the namespace prefix at the call
-  site itself.
-- Add the same one-line wrapper for `zhao_window_start`/`zhao_window_end` if you want those bare
-  too, following the identical pattern.
+One thing worth knowing either way: **`adapter.dispatch()`/a `dispatch:` block in
+`dbt_project.yml` does *not* achieve bare calls on its own** — tested directly (twice, with real
+dbt-core runs), and it doesn't. `dispatch` controls which *implementation* an already-namespaced
+call resolves to (e.g. letting you override a package macro's behavior in your own project); it's
+never a mechanism for eliminating the namespace prefix at the call site itself. Also worth
+knowing: `ref()`/`source()` can't be overridden this way either, unlike something such as
+`generate_schema_name` — dbt statically scans for the literal `ref(...)`/`source(...)` pattern in
+raw, unrendered source to build the dependency graph, before any macro dispatch happens at all, so
+there's no override hook available for them regardless.
 
 ## v1 scope: `day`/`week` only
 
