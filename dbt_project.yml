@@ -1,5 +1,5 @@
 name: 'zhao_utils'
-version: '0.1.0'
+version: '0.2.0'
 config-version: 2
 
 # A pure-macro package -- no models/seeds/tests of its own. See README.md.

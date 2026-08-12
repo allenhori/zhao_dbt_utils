@@ -47,7 +47,7 @@ local copy of anything.
 # packages.yml
 packages:
   - git: "https://github.com/allenhori/zhao_dbt_utils"
-    revision: v0.1.0  # pin to a tag
+    revision: v0.2.0  # pin to a tag
 ```
 
 Then `dbt deps`. On its own, this means calling with the package namespace prefix —
