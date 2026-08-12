@@ -61,8 +61,8 @@ themselves (e.g. `{{ dbt_utils.star(...) }}`).
 
 ```sql
 -- your own project's macros/wref.sql
-{% macro wref(upstream_name, expand_back=none, expand_forward=none) %}
-  {{ return(zhao_utils.wref(upstream_name, expand_back, expand_forward)) }}
+{% macro wref(upstream_name, expand_back=none, expand_forward=none, expand_back_unit=none, expand_forward_unit=none) %}
+  {{ return(zhao_utils.wref(upstream_name, expand_back, expand_forward, expand_back_unit, expand_forward_unit)) }}
 {% endmacro %}
 ```
 
@@ -164,6 +164,24 @@ Rows 1 and 2 need nothing at the call site beyond the bare `wref('mb_daily')`/
 `zhao_window_start('mb_daily')` call itself — whether you get widening or not depends entirely
 on whether `meta.zhao` exists, set once in the model's own `config(...)` block. Rows 3-5 are only
 reachable by deliberately passing `expand_back`/`expand_forward` yourself.
+
+### Units: `expand_back_unit`/`expand_forward_unit`, optional, default `day`
+
+All three macros also accept optional `expand_back_unit`/`expand_forward_unit` arguments,
+following the identical fallback chain as the table above — independently of the amount:
+
+```sql
+-- explicit amount AND unit, visible at the call site:
+select * from {{ zhao_utils.wref('mb_weekly', expand_back=2, expand_back_unit='week') }} mb_weekly
+```
+
+If you don't pass a unit, it comes from `meta.zhao`'s `lookback_unit`/`lookahead_unit` when a
+`meta.zhao` block exists (defaulting to `day` if that block doesn't set one), or defaults to
+`day` outright when there's no `meta.zhao` block at all. Passing a unit that conflicts with
+`meta.zhao`'s is a compile error, same as a conflicting amount. Passing a unit without an amount
+(e.g. `expand_back_unit='week'` with no `expand_back`) is also a compile error — a unit with
+nothing to measure doesn't mean anything, so this fails loudly rather than silently doing
+nothing with it.
 
 ## Bare calls, if you want them
 

@@ -10,17 +10,18 @@
   second place to maintain the numbers.
 
   NAMING: this package's own arguments are `expand_back`/`expand_forward`
-  -- deliberately NOT `lookback`/`lookahead`, to avoid confusion with
-  dbt's own unrelated native `lookback` model config (which means "re-
-  process N past batches," a completely different concept). Internally
-  these map directly to meta.zhao's `lookback`/`lookahead` keys, which
-  are UNCHANGED and NOT renamed -- that vocabulary is already
-  established and documented within zhao-dbt-plan itself, where the
-  namespacing (`meta.zhao.lookback`) already disambiguates it from dbt's
-  own config. The rename only applies here, at the macro call site,
-  which is the one place a bare, unnamespaced `lookback=N` would
-  actually risk being confused with dbt's own `config(lookback=N)`
-  sitting on the very same model.
+  (and `expand_back_unit`/`expand_forward_unit`) -- deliberately NOT
+  `lookback`/`lookahead`, to avoid confusion with dbt's own unrelated
+  native `lookback` model config (which means "reprocess N past
+  batches," a completely different concept). Internally these map
+  directly to meta.zhao's `lookback`/`lookahead`/`lookback_unit`/
+  `lookahead_unit` keys, which are UNCHANGED and NOT renamed -- that
+  vocabulary is already established and documented within
+  zhao-dbt-plan itself, where the namespacing (`meta.zhao.lookback`)
+  already disambiguates it from dbt's own config. The rename only
+  applies here, at the macro call site, which is the one place a bare,
+  unnamespaced `lookback=N` would actually risk being confused with
+  dbt's own `config(lookback=N)` sitting on the very same model.
 
   IMPORTANT: meta.zhao lives on the DOWNSTREAM model doing the reading,
   not on the upstream being read -- e.g. `mb_orders_rolling_7d` (which
@@ -33,11 +34,22 @@
   against the real fixture project during testing, after an earlier
   version of this file had the lookup direction backwards.
 
-  v1 scope: only `lookback_unit`/`lookahead_unit: day` and `week` are
-  supported. `month`/`year` raise a clear compile error rather than
-  silently producing an approximate (and possibly wrong) result --
-  calendar month/year arithmetic is warehouse-dialect-dependent and out
-  of scope for this first version.
+  UNIT HANDLING: `expand_back_unit`/`expand_forward_unit` are optional,
+  default to `'day'` when nothing else specifies otherwise, and are
+  validated against meta.zhao's own `lookback_unit`/`lookahead_unit`
+  the same way `expand_back`/`expand_forward` are validated against
+  meta.zhao's `lookback`/`lookahead` -- mismatch is a compile error,
+  given without a meta.zhao block at all is a warning (not an error),
+  matching the amount's own fallback chain exactly. Fixed a real gap
+  here: an earlier version of this file hardcoded 'day' whenever
+  explicit args were given without a meta.zhao block to read a unit
+  from, with no way for a caller to specify e.g. weeks in that case.
+
+  v1 scope: only `day` and `week` are supported for any unit, whether
+  it comes from meta.zhao or an explicit argument. `month`/`year` raise
+  a clear compile error rather than silently producing an approximate
+  (and possibly wrong) result -- calendar month/year arithmetic is
+  warehouse-dialect-dependent and out of scope for this first version.
 
   `execute` guards throughout: `graph` (and everything derived from it)
   is only fully populated once `execute` is true -- dbt's real
@@ -55,9 +67,9 @@
   via testing that bare calls to an installed package's macros don't
   resolve in dbt-core 1.10 without extra setup. If you want bare calls
   anyway, add a short wrapper macro to your OWN project (not this
-  package) -- see README.md's "Bare calls, if you want them" section
-  for the exact, tested snippet. No dbt_project.yml changes needed for
-  that -- just one small macro file in your own project.
+  package) -- see README.md's Install section for the exact, tested
+  snippet. No dbt_project.yml changes needed for that -- just one small
+  macro file in your own project.
 #}
 
 {#- Finds the graph node for a bare model name -- used only to look up
@@ -111,10 +123,24 @@
     all (compiles and runs fine, but warns that the planner won't see
     it), and when no explicit arg is given at all, falls back to
     meta.zhao, and then to none (meaning: no widening, plain dbt
-    default behavior). -#}
-{% macro _zhao_resolve(upstream_name, direction, explicit_value) %}
+    default behavior). `explicit_unit` follows the identical chain,
+    independently of `explicit_value` -- see the module doc comment's
+    "UNIT HANDLING" section. Giving `explicit_unit` without
+    `explicit_value` is a clear compile error (a unit with no amount
+    doesn't mean anything). -#}
+{% macro _zhao_resolve(upstream_name, direction, explicit_value, explicit_unit) %}
   {%- set meta = zhao_utils._zhao_current_meta() -%}
   {%- set arg_name = zhao_utils._zhao_arg_name(direction) -%}
+  {%- set unit_arg_name = arg_name ~ '_unit' -%}
+
+  {%- if explicit_value is none and explicit_unit is not none and execute -%}
+    {{ exceptions.raise_compiler_error(
+      "zhao_utils: " ~ unit_arg_name ~ "='" ~ explicit_unit ~ "' was passed for a read of '"
+      ~ upstream_name ~ "' without " ~ arg_name ~ " -- a unit with no amount doesn't mean "
+      ~ "anything. Pass " ~ arg_name ~ " too, or drop " ~ unit_arg_name ~ " and let it come "
+      ~ "from meta.zhao."
+    ) }}
+  {%- endif -%}
 
   {%- if explicit_value is not none and execute -%}
     {%- if meta is none -%}
@@ -124,7 +150,7 @@
         ~ "fine using the value you gave -- but zhao-dbt-plan's planner won't see it, so its plan "
         ~ "for this model will be inaccurate. Add a meta.zhao config to unlock accurate planning."
       ) -%}
-      {{ return({'amount': explicit_value, 'unit': 'day'}) }}
+      {{ return({'amount': explicit_value, 'unit': explicit_unit if explicit_unit is not none else 'day'}) }}
     {%- endif -%}
     {%- set overrides = meta.get(direction ~ '_overrides', {}) or {} -%}
     {%- set configured_value = overrides.get(upstream_name, meta.get(direction)) -%}
@@ -136,7 +162,16 @@
         ~ "meta.zhao."
       ) }}
     {%- endif -%}
-    {{ return({'amount': explicit_value, 'unit': meta.get(direction ~ '_unit', 'day')}) }}
+    {%- set configured_unit = meta.get(direction ~ '_unit', 'day') -%}
+    {%- if explicit_unit is not none and explicit_unit != configured_unit -%}
+      {{ exceptions.raise_compiler_error(
+        "zhao_utils: " ~ unit_arg_name ~ "='" ~ explicit_unit ~ "' passed at the call site for a "
+        ~ "read of '" ~ upstream_name ~ "' does not match the effective meta.zhao." ~ direction
+        ~ "_unit value ('" ~ configured_unit ~ "'). Keep these in sync, or drop the argument to "
+        ~ "trust meta.zhao."
+      ) }}
+    {%- endif -%}
+    {{ return({'amount': explicit_value, 'unit': configured_unit}) }}
   {%- endif -%}
 
   {%- if meta is none -%}
@@ -151,7 +186,7 @@
   {%- set unit = resolved['unit'] -%}
   {%- if unit not in ('day', 'week') -%}
     {{ exceptions.raise_compiler_error(
-      "zhao_utils: meta.zhao's lookback_unit/lookahead_unit '" ~ unit
+      "zhao_utils: lookback_unit/lookahead_unit '" ~ unit
       ~ "' isn't supported yet (v1 only supports day/week) -- see this package's README."
     ) }}
   {%- endif -%}
@@ -163,11 +198,11 @@
     event_time_start when there's no meta.zhao block and no explicit
     expand_back given (plain dbt default behavior, no widening), and
     during dbt's parse-time pass (see module doc comment). #}
-{% macro zhao_window_start(upstream_name, expand_back=none) %}
+{% macro zhao_window_start(upstream_name, expand_back=none, expand_back_unit=none) %}
   {%- if not execute -%}
     {{ return('') }}
   {%- endif -%}
-  {%- set resolved = zhao_utils._zhao_resolve(upstream_name, 'lookback', expand_back) -%}
+  {%- set resolved = zhao_utils._zhao_resolve(upstream_name, 'lookback', expand_back, expand_back_unit) -%}
   {%- set literal_start = "cast('" ~ model.batch.event_time_start ~ "' as " ~ dbt.type_timestamp() ~ ")" -%}
   {%- if resolved is none -%}
     {{ return(literal_start) }}
@@ -178,11 +213,11 @@
 
 {#- The widened window end for a read of `upstream_name`. Same fallback
     behavior as zhao_window_start. #}
-{% macro zhao_window_end(upstream_name, expand_forward=none) %}
+{% macro zhao_window_end(upstream_name, expand_forward=none, expand_forward_unit=none) %}
   {%- if not execute -%}
     {{ return('') }}
   {%- endif -%}
-  {%- set resolved = zhao_utils._zhao_resolve(upstream_name, 'lookahead', expand_forward) -%}
+  {%- set resolved = zhao_utils._zhao_resolve(upstream_name, 'lookahead', expand_forward, expand_forward_unit) -%}
   {%- set literal_end = "cast('" ~ model.batch.event_time_end ~ "' as " ~ dbt.type_timestamp() ~ ")" -%}
   {%- if resolved is none -%}
     {{ return(literal_end) }}
@@ -202,12 +237,13 @@
     site, same as any other subquery:
 
       select * from {{ zhao_utils.wref('model_a') }} model_a #}
-{% macro wref(upstream_name, expand_back=none, expand_forward=none) %}
+{% macro wref(upstream_name, expand_back=none, expand_forward=none, expand_back_unit=none, expand_forward_unit=none) %}
   {%- if not execute -%}
     {{ return(ref(upstream_name)) }}
   {%- endif -%}
   {%- set meta = zhao_utils._zhao_current_meta() -%}
-  {%- if meta is none and expand_back is none and expand_forward is none -%}
+  {%- if meta is none and expand_back is none and expand_forward is none
+        and expand_back_unit is none and expand_forward_unit is none -%}
     {{ return(ref(upstream_name)) }}
   {%- endif -%}
   {%- set upstream_node = zhao_utils._zhao_find_node(upstream_name) -%}
@@ -219,8 +255,8 @@
       ~ "needs event_time on the upstream to know which column to filter on."
     ) }}
   {%- endif -%}
-  {%- set start = zhao_utils.zhao_window_start(upstream_name, expand_back) -%}
-  {%- set end = zhao_utils.zhao_window_end(upstream_name, expand_forward) -%}
+  {%- set start = zhao_utils.zhao_window_start(upstream_name, expand_back, expand_back_unit) -%}
+  {%- set end = zhao_utils.zhao_window_end(upstream_name, expand_forward, expand_forward_unit) -%}
 (
   select * from {{ ref(upstream_name).render() }}
   where {{ event_time_col }} >= {{ start }}
