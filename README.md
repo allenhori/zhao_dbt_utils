@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/allenhori/zhao_dbt_utils/master/docs/assets/logo.png" alt="zhao logo" width="128">
+</p>
+
 # zhao_utils
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
